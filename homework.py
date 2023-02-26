@@ -28,6 +28,25 @@ HOMEWORK_VERDICTS = {
 
 EXCEPTION_MESSAGE_PATTERN = 'Сбой в работе программы: "{}"'
 
+API_ANSWERS_PATTERNS = {
+    'correct': (dict, {
+        'homeworks': (list, (dict, {
+            'status': (str, None),
+            'homework_name': (str, None),
+        })),
+        'current_date': (int, None)
+    }),
+    'unresolved': (dict, {
+        'code': (str, 'UnknownError'),
+        'error': (dict, {'error': (str, 'from_date ')}),
+    }),
+    'broken_token': (dict, {
+        'code': (str, 'not_authenticated'),
+        'message': (str, None),
+        'source': (str, None)
+    })
+}
+
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -76,36 +95,67 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=payload
         )
-        if response.status_code == 404:
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
             message = (f'Эндпоинт "{ENDPOINT}" недоступен.'
                        f' Код ответа API: {response.status_code}')
             raise LookupError(message)
         else:
-            return response.json()
+            message = ('Эндпоинт сообщил об ошибке.'
+                       f' Код ответа API: {response.status_code}')
+            raise LookupError(message)
     except Exception as error:
         message = (f'Ошибка при запросе на эндпоинт "{ENDPOINT}".'
                    f' Сообщение об ошибке: "{error}"')
-        logging.error(message)
+        raise LookupError(message)
+
+
+def check_pattern(data, datatype, inner):
+    """Проверяет данные на соответствие шаблону."""
+    if type(data) is not datatype:
+        return False
+    if datatype is list:
+        return all([check_pattern(item, inner[0], inner[1]) for item in data])
+    elif datatype is dict:
+        if type(inner) is not dict:
+            return False
+        else:
+            if not all([key in data for key in inner.keys()]):
+                return False
+            return all([check_pattern(data[key], inner[key][0], inner[key][1])
+                        for key in inner.keys()])
+    elif datatype in [int, float, str, bool]:
+        if inner:
+            return type(inner) is datatype and data == inner
+        return True
+    return False
 
 
 def check_response(response):
     """Проверяет ответ на соответствие документации API."""
-    if not response:
-        return False
-    expected_keys = ['homeworks', 'current_date']
-    for key in expected_keys:
-        if key not in response:
-            raise KeyError(f'Ключ "{key}" не найден в ответе API')
-    return True
+    if type(response) != dict:
+        raise TypeError('API должен отправлять в ответ словарь')
+
+    for name, pattern in API_ANSWERS_PATTERNS.items():
+        if check_pattern(response, pattern[0], pattern[1]):
+            return name
+
+    raise TypeError(
+        'Содержимое ответа API не соответствует ожидаемым шаблонам'
+    )
 
 
 def parse_status(homework):
     """Получает из словаря с данными о домашней работе её статус."""
-    homework_name = homework['homework_name']
-    status = homework['status']
+    if 'homework_name' in homework and 'status' in homework:
+        homework_name = homework['homework_name']
+        status = homework['status']
 
-    if status not in HOMEWORK_VERDICTS:
-        raise KeyError(f'Неизвестный статус задания: "{status}"')
+        if status not in HOMEWORK_VERDICTS:
+            raise KeyError(f'Неизвестный статус задания: "{status}"')
+    else:
+        raise LookupError('API вернул ответ не про домашки.')
 
     verdict = HOMEWORK_VERDICTS[status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -114,22 +164,22 @@ def parse_status(homework):
 def main():
     """Основная логика работы бота."""
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time())
+    timestamp = int(time.time()) * 0
 
     last_error_message = ''
     ready = check_tokens()
     while ready:
         try:
             api_answer = get_api_answer(timestamp)
-            if check_response(api_answer):
-                homeworks = api_answer['homeworks']
-                if not homeworks:
-                    logging.debug('Новых статусов работ не обнаружено.')
-                for data in homeworks:
-                    status = parse_status(data)
-                    if status:
-                        send_message(bot, status)
-                timestamp = api_answer['current_date']
+            check_response(api_answer)
+            homeworks = api_answer['homeworks']
+            if not homeworks:
+                logging.debug('Новых статусов работ не обнаружено.')
+            for homework in homeworks:
+                status = parse_status(homework)
+                if status:
+                    send_message(bot, status)
+            timestamp = api_answer['current_date']
 
         except Exception as error:
             logging.error(error)
