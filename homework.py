@@ -44,7 +44,7 @@ logging.basicConfig(
 )
 
 
-def check_tokens():
+def check_tokens() -> bool:
     """Проверяет наличие и корректность переменных окружения."""
     environment_variables = [
         PRACTICUM_TOKEN,
@@ -54,7 +54,7 @@ def check_tokens():
     return all(environment_variables)
 
 
-def send_message(bot, message):
+def send_message(bot: telegram.Bot, message: str) -> None:
     """Посылает Telegram-боту bot сообщение message."""
     try:
         bot.send_message(
@@ -77,7 +77,7 @@ def send_message(bot, message):
         logging.debug(f'Бот отправил сообщение "{message}"')
 
 
-def get_api_answer(timestamp):
+def get_api_answer(timestamp: int) -> dict:
     """Получает ответ API Практикума."""
     payload = {'from_date': {timestamp}}
     try:
@@ -102,7 +102,7 @@ def get_api_answer(timestamp):
         raise DataRequestException(message)
 
 
-def check_response(response):
+def check_response(response: dict) -> None:
     """Проверяет ответ на соответствие документации API."""
     if not isinstance(response, dict):
         raise UnexpectedDatatypes('API ответил не словарём.')
@@ -124,7 +124,7 @@ def check_response(response):
         )
 
 
-def parse_status(homework):
+def parse_status(homework: dict) -> str:
     """Получает из словаря с данными о домашней работе её статус."""
     if 'homework_name' in homework and 'status' in homework:
         homework_name = homework['homework_name']
@@ -139,7 +139,7 @@ def parse_status(homework):
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
-def main():
+def main() -> None:
     """Основная логика работы бота."""
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
