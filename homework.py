@@ -2,10 +2,15 @@ import os
 import sys
 import time
 import logging
-from dotenv import load_dotenv
+from http import HTTPStatus
 
 import requests
 import telegram
+from dotenv import load_dotenv
+
+from exceptions import (MinorException, UnexpectedResponse,
+                        UnexpectedDatatypes, MissingData)
+from exceptions import MajorException, DataRequestException
 
 
 load_dotenv()
@@ -15,7 +20,7 @@ PRACTICUM_TOKEN = os.getenv('PRACTICUM_TOKEN')
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-RETRY_PERIOD = 600
+RETRY_PERIOD = 60 * 10
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
@@ -28,48 +33,25 @@ HOMEWORK_VERDICTS = {
 
 EXCEPTION_MESSAGE_PATTERN = 'Сбой в работе программы: "{}"'
 
-API_ANSWERS_PATTERNS = {
-    'correct': (dict, {
-        'homeworks': (list, (dict, {
-            'status': (str, None),
-            'homework_name': (str, None),
-        })),
-        'current_date': (int, None)
-    }),
-    'unresolved': (dict, {
-        'code': (str, 'UnknownError'),
-        'error': (dict, {'error': (str, 'from_date ')}),
-    }),
-    'broken_token': (dict, {
-        'code': (str, 'not_authenticated'),
-        'message': (str, None),
-        'source': (str, None)
-    })
-}
-
 
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(f'{__file__[:-3]}.log', mode='w'),
+    ]
 )
 
 
 def check_tokens():
     """Проверяет наличие и корректность переменных окружения."""
-    environment_variables = {
-        PRACTICUM_TOKEN: 'PRACTICUM_TOKEN',
-        TELEGRAM_TOKEN: 'TELEGRAM_TOKEN',
-        TELEGRAM_CHAT_ID: 'TELEGRAM_CHAT_ID'
-    }
-    message_pattern = ('Отсутствует обязательная переменная окружения:'
-                       ' {}. Программа принудительно остановлена.')
-    result = True
-    for variable, name in environment_variables.items():
-        if not variable:
-            logging.critical(message_pattern.format(name))
-            result = False
-    return result
+    environment_variables = [
+        PRACTICUM_TOKEN,
+        TELEGRAM_TOKEN,
+        TELEGRAM_CHAT_ID,
+    ]
+    return all(environment_variables)
 
 
 def send_message(bot, message):
@@ -79,11 +61,20 @@ def send_message(bot, message):
             chat_id=TELEGRAM_CHAT_ID,
             text=message,
         )
-        logging.debug('Бот отправил сообщение "{message}"')
-    except Exception as error:
+    except telegram.error.NetworkError as network_error:
         logging.error(
-            f'Не удалось отправить сообщение в Telegram. Ошибка: "{error}"'
+            'Не удалось установить соединение с сетью Telegram.',
+            exc_info=network_error
         )
+        logging.error(f'Неотправленное сообщение: "{message}"')
+    except telegram.error.TelegramError as error:
+        logging.error(
+            'Не удалось отправить сообщение в Telegram.',
+            exc_info=error
+        )
+        logging.error(f'Неотправленное сообщение: "{message}"')
+    else:
+        logging.debug(f'Бот отправил сообщение "{message}"')
 
 
 def get_api_answer(timestamp):
@@ -95,55 +86,42 @@ def get_api_answer(timestamp):
             headers=HEADERS,
             params=payload
         )
-        if response.status_code == 200:
+        if response.status_code == HTTPStatus.OK:
             return response.json()
-        elif response.status_code == 404:
+        elif response.status_code == HTTPStatus.NOT_FOUND:
             message = (f'Эндпоинт "{ENDPOINT}" недоступен.'
                        f' Код ответа API: {response.status_code}')
-            raise LookupError(message)
+            raise DataRequestException(message)
         else:
             message = ('Эндпоинт сообщил об ошибке.'
                        f' Код ответа API: {response.status_code}')
-            raise LookupError(message)
+            raise DataRequestException(message)
     except Exception as error:
         message = (f'Ошибка при запросе на эндпоинт "{ENDPOINT}".'
                    f' Сообщение об ошибке: "{error}"')
-        raise LookupError(message)
-
-
-def check_pattern(data, datatype, inner):
-    """Проверяет данные на соответствие шаблону."""
-    if type(data) is not datatype:
-        return False
-    if datatype is list:
-        return all([check_pattern(item, inner[0], inner[1]) for item in data])
-    elif datatype is dict:
-        if type(inner) is not dict:
-            return False
-        else:
-            if not all([key in data for key in inner.keys()]):
-                return False
-            return all([check_pattern(data[key], inner[key][0], inner[key][1])
-                        for key in inner.keys()])
-    elif datatype in [int, float, str, bool]:
-        if inner:
-            return type(inner) is datatype and data == inner
-        return True
-    return False
+        raise DataRequestException(message)
 
 
 def check_response(response):
     """Проверяет ответ на соответствие документации API."""
-    if type(response) != dict:
-        raise TypeError('API должен отправлять в ответ словарь')
-
-    for name, pattern in API_ANSWERS_PATTERNS.items():
-        if check_pattern(response, pattern[0], pattern[1]):
-            return name
-
-    raise TypeError(
-        'Содержимое ответа API не соответствует ожидаемым шаблонам'
-    )
+    if not isinstance(response, dict):
+        raise UnexpectedDatatypes('API ответил не словарём.')
+    if ('homeworks' not in response
+       or 'current_date' not in response):
+        raise UnexpectedResponse(
+            'API не дал удовлетворительный ответ. Не хватает ключей.'
+        )
+    homeworks = response['homeworks']
+    if not isinstance(homeworks, list):
+        raise UnexpectedDatatypes('API прислал домашки не списком.')
+    if not len(homeworks):
+        raise MissingData('API не увидел изменений в домашках.')
+    homework = homeworks[0]
+    if ('status' not in homework
+       or 'homework_name' not in homework):
+        raise UnexpectedResponse(
+            'API прислал данные о домашке в некорректном виде.'
+        )
 
 
 def parse_status(homework):
@@ -164,11 +142,11 @@ def parse_status(homework):
 def main():
     """Основная логика работы бота."""
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    timestamp = int(time.time()) * 0
+    timestamp = int(time.time())
 
     last_error_message = ''
-    ready = check_tokens()
-    while ready:
+    is_ready = check_tokens()
+    while is_ready:
         try:
             api_answer = get_api_answer(timestamp)
             check_response(api_answer)
@@ -179,17 +157,22 @@ def main():
                 status = parse_status(homework)
                 if status:
                     send_message(bot, status)
+                time.sleep(0.5)
             timestamp = api_answer['current_date']
 
-        except Exception as error:
-            logging.error(error)
+        except MinorException as minor:
+            logging.warning(minor)
+
+        except MajorException as error:
+            logging.error(error, exc_info=error)
 
             error = str(error)
             if last_error_message != error:
                 last_error_message = error
                 send_message(bot, error)
 
-        time.sleep(RETRY_PERIOD)
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
