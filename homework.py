@@ -44,14 +44,15 @@ logging.basicConfig(
 )
 
 
-def check_tokens() -> bool:
+def check_tokens():
     """Проверяет наличие и корректность переменных окружения."""
     environment_variables = [
         PRACTICUM_TOKEN,
         TELEGRAM_TOKEN,
         TELEGRAM_CHAT_ID,
     ]
-    return all(environment_variables)
+    if not all(environment_variables):
+        raise ImportError('В окружении найдены не все обязательные переменные')
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
@@ -144,8 +145,13 @@ def main() -> None:
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
 
+    is_ready = False
+    try:
+        is_ready = check_tokens()
+    except ImportError as error:
+        logging.critical(error, exc_info=error)
+
     last_error_message = ''
-    is_ready = check_tokens()
     while is_ready:
         try:
             api_answer = get_api_answer(timestamp)

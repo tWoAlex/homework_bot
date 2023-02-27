@@ -5,7 +5,7 @@ class MinorException(Exception):
     """Небольшие исключения, которые можно пропускать."""
 
 
-class UnexpectedDatatypes(MinorException):
+class UnexpectedDatatypes(TypeError, MinorException):
     """Данные приняты в неверной структуре."""
 
 
