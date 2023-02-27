@@ -51,8 +51,12 @@ def check_tokens():
         TELEGRAM_TOKEN,
         TELEGRAM_CHAT_ID,
     ]
-    if not all(environment_variables):
-        raise ImportError('В окружении найдены не все обязательные переменные')
+    result = all(environment_variables)
+    if not result:
+        message = ('Отсутствуют обязательные переменные окружения.'
+                   'Программа принудительно остановлена.')
+        logging.critical(message)
+    return result
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
@@ -145,12 +149,7 @@ def main() -> None:
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
 
-    is_ready = False
-    try:
-        is_ready = check_tokens()
-    except ImportError as error:
-        logging.critical(error, exc_info=error)
-
+    is_ready = check_tokens()
     last_error_message = ''
     while is_ready:
         try:
@@ -165,18 +164,14 @@ def main() -> None:
                     send_message(bot, status)
                 time.sleep(0.5)
             timestamp = api_answer['current_date']
-
         except MinorException as minor:
             logging.warning(minor)
-
         except MajorException as error:
             logging.error(error, exc_info=error)
-
             error = str(error)
             if last_error_message != error:
                 last_error_message = error
                 send_message(bot, error)
-
         finally:
             time.sleep(RETRY_PERIOD)
 
