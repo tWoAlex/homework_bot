@@ -8,9 +8,9 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
-from exceptions import (MinorException, UnexpectedResponse,
-                        UnexpectedDatatypes, MissingData)
-from exceptions import MajorException, DataRequestException
+from exceptions import (MinorException, MajorException, RuntimeUnavailable,
+                        UnexpectedResponse, UnexpectedDatatypes, MissingData,
+                        DataRequestException)
 
 
 load_dotenv()
@@ -39,23 +39,23 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(f'{__file__[:-3]}.log', mode='w'),
+        logging.FileHandler('homework.log', mode='w'),
     ]
 )
 
 
-def check_tokens():
+def check_tokens() -> None:
     """Проверяет наличие и корректность переменных окружения."""
-    environment_variables = [
+    environment_variables = (
         PRACTICUM_TOKEN,
         TELEGRAM_TOKEN,
         TELEGRAM_CHAT_ID,
-    ]
+    )
     result = all(environment_variables)
     if not result:
         message = ('Отсутствуют обязательные переменные окружения.'
                    'Программа принудительно остановлена.')
-        logging.critical(message)
+        raise RuntimeUnavailable(message)
     return result
 
 
@@ -119,26 +119,18 @@ def check_response(response: dict) -> None:
     homeworks = response['homeworks']
     if not isinstance(homeworks, list):
         raise UnexpectedDatatypes('API прислал домашки не списком.')
-    if not len(homeworks):
-        raise MissingData('API не увидел изменений в домашках.')
-    homework = homeworks[0]
-    if ('status' not in homework
-       or 'homework_name' not in homework):
-        raise UnexpectedResponse(
-            'API прислал данные о домашке в некорректном виде.'
-        )
 
 
 def parse_status(homework: dict) -> str:
     """Получает из словаря с данными о домашней работе её статус."""
-    if 'homework_name' in homework and 'status' in homework:
-        homework_name = homework['homework_name']
-        status = homework['status']
+    if ('homework_name' not in homework
+       or 'status' not in homework):
+        raise MissingData('В данных о домашке не хватает ключей.')
 
-        if status not in HOMEWORK_VERDICTS:
-            raise KeyError(f'Неизвестный статус задания: "{status}"')
-    else:
-        raise LookupError('API вернул ответ не про домашки.')
+    homework_name = homework['homework_name']
+    status = homework['status']
+    if status not in HOMEWORK_VERDICTS:
+        raise UnexpectedResponse(f'Неизвестный статус задания: "{status}"')
 
     verdict = HOMEWORK_VERDICTS[status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -149,7 +141,11 @@ def main() -> None:
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
 
-    is_ready = check_tokens()
+    is_ready = False
+    try:
+        is_ready = check_tokens()
+    except RuntimeUnavailable as error:
+        logging.critical(error, exc_info=error)
     last_error_message = ''
     while is_ready:
         try:
@@ -160,18 +156,20 @@ def main() -> None:
                 logging.debug('Новых статусов работ не обнаружено.')
             for homework in homeworks:
                 status = parse_status(homework)
-                if status:
-                    send_message(bot, status)
+                send_message(bot, status)
                 time.sleep(0.5)
             timestamp = api_answer['current_date']
-        except MinorException as minor:
-            logging.warning(minor)
+
         except MajorException as error:
             logging.error(error, exc_info=error)
             error = str(error)
             if last_error_message != error:
                 last_error_message = error
                 send_message(bot, error)
+
+        except MinorException as minor:
+            logging.warning(minor, exc_info=minor)
+
         finally:
             time.sleep(RETRY_PERIOD)
 

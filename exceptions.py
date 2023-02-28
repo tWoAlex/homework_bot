@@ -1,6 +1,4 @@
 """Homework bot custom exceptions."""
-
-
 class MinorException(Exception):
     """Небольшие исключения, которые можно пропускать."""
 
@@ -27,3 +25,7 @@ class DataRequestException(MajorException):
 
 class TelegramNotificationException(MajorException):
     """Исключения при проталкивании данных в Telegram."""
+
+
+class RuntimeUnavailable(Exception):
+    """Продолжение работы невозможно."""
