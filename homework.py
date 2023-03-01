@@ -8,9 +8,8 @@ import requests
 import telegram
 from dotenv import load_dotenv
 
-from exceptions import (MinorException, MajorException, RuntimeUnavailable,
-                        UnexpectedResponse, UnexpectedDatatypes, MissingData,
-                        DataRequestException)
+from exceptions import (MinorException, MajorException, DataRequestException,
+                        UnexpectedResponse, UnexpectedDatatypes, MissingData)
 
 
 load_dotenv()
@@ -44,19 +43,9 @@ logging.basicConfig(
 )
 
 
-def check_tokens() -> None:
+def check_tokens() -> bool:
     """Проверяет наличие и корректность переменных окружения."""
-    environment_variables = (
-        PRACTICUM_TOKEN,
-        TELEGRAM_TOKEN,
-        TELEGRAM_CHAT_ID,
-    )
-    result = all(environment_variables)
-    if not result:
-        message = ('Отсутствуют обязательные переменные окружения.'
-                   'Программа принудительно остановлена.')
-        raise RuntimeUnavailable(message)
-    return result
+    return all((PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID,))
 
 
 def send_message(bot: telegram.Bot, message: str) -> None:
@@ -141,11 +130,13 @@ def main() -> None:
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
 
-    is_ready = False
-    try:
-        is_ready = check_tokens()
-    except RuntimeUnavailable as error:
-        logging.critical(error, exc_info=error)
+    is_ready = check_tokens()
+    if not is_ready:
+        logging.critical(
+            ('Отсутствуют обязательные переменные окружения.'
+             'Программа принудительно остановлена.')
+        )
+
     last_error_message = ''
     while is_ready:
         try:
